@@ -1,80 +1,148 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.signal import get_window
+from scipy.signal import get_window, hilbert
+import copy
+
+
+
+class Transducer:
+    def __init__(
+            self, 
+            position: np.ndarray, 
+            angle_deg: float = 0.0,
+            beam_width_deg: float = 25.0):
+        self.position = position
+        self.angle_deg = angle_deg
+        self.beam_width_deg = beam_width_deg
+
+    def transmit_signal(self, ping: 'Ping'):
+        """
+        Resets the transducer history and appends the ping to be sent out.
+        """
+        self.transducer_history = ping.signal.copy()
+
+    def receive_signal(self, return_signal: np.ndarray):
+        self.transducer_history = np.concatenate(
+            (self.transducer_history, return_signal)
+            )
+    
+
 
 class Ping:
-    # speed of sound in water
-    c = 1500 # m/s
-    water_density = 997 # kg/m^3
-
-    beam_angle = 25 # degrees
-
-    def __init__(self, 
-                 frequency: float | list, 
-                 duration: float, 
-                 amplitude: float,
-                 phase: float = 0,
-                 sample_rate: int = 4e6,
-                 window_mode: str = 'gaussian'):
+    def __init__(
+            self, 
+            frequency: float | list, 
+            duration: float, 
+            amplitude: float,
+            phase: float = 0,
+            sample_rate: int = 4e6,
+            window_mode: str = 'gaussian'):
         self.frequency = np.atleast_1d(frequency)
         self.duration = duration
         self.fs = sample_rate
+        self.window_mode = window_mode
+
         self.amplitude = amplitude
         self.phase = phase
-        
-        self.window_mode = window_mode
 
         self.t = np.arange(0, self.duration, 1/self.fs)
         self.signal = self._generate_signal()
 
-        self.position = np.zeros(3)
-        self.initial_distance = 1.0
 
     def _generate_window(self, N):
-        """Generate a window function."""
+        """
+        Generate a window function.
+        """
         if self.window_mode == 'gaussian':
             std = (0.2 * N)
             return get_window(('gaussian', std), N)
         
+
     def _generate_signal(self):
-        base_signal = np.zeros_like(self.t)
+        signal = np.zeros_like(self.t)
         for f in self.frequency:
-            component = np.sin(2 * np.pi * f * self.t + self.phase)
-            base_signal += component
-        base_signal /= len(self.frequency)  # normalize multi-tone sum
-
+            signal += np.sin(2 * np.pi * f * self.t + self.phase)
+        if len(self.frequency) > 0:
+            signal /= len(self.frequency)
+            
         window = self._generate_window(len(self.t))
-        return self.amplitude * base_signal * window
-
-    def apply_transmission_loss(self, distance_r: float):
-        r0 = self.initial_distance
-        r_total = np.linalg.norm(self.position) + distance_r
-
-        attenuation = (r0 / r_total)
-        self.amplitude *= attenuation
-        self.signal *= attenuation
-        self.position += np.array([0, 0, distance_r])  # assumes propagation along +z
-        return self.signal
+        
+        return self.amplitude * signal * window
     
-    def add_noise(self, snr_db):
-        signal_power = np.mean(self.signal ** 2)
-        noise_power = signal_power / (10 ** (snr_db / 10))
-        noise = np.sqrt(noise_power) * np.random.randn(len(self.signal))
-        self.signal += noise
 
-    def get_intensity(self):
-        p_e = self.amplitude/np.sqrt(2)
-        self.intensity = p_e**2/(Ping.water_density*Ping.c) 
-        return self.intensity
+
+class Reflector:
+    def __init__(
+            self,
+            position: np.ndarray,
+            radius: float,
+            reflectivity: float = 0.8,
+            phase_shift_deg: float = 180.0):
+        self.position = position
+        self.radius = radius
+        self.reflectivity = reflectivity
+        self.phase_shift_deg = phase_shift_deg
+
+    def reflect(self, incident_signal):
+        """
+        Applies 180 deg phase shift and reflectance loss.
+        """
+        phase_shifted_signal = incident_signal * -1
+        return phase_shifted_signal * self.reflectivity
+
+
+
+class World:
+    # speed of sound in water
+    c = 1500 # m/s
+    water_density = 997 # kg/m^3
     
-    def show(self):
-        plt.figure(figsize=(8, 3))
-        plt.plot(self.t * 1e3, self.signal)
-        plt.title("Sonar Ping Pulse")
-        plt.xlabel("Time (ms)")
-        plt.ylabel("Amplitude")
-        plt.grid(True)
-        plt.show()
+    # acoustic impedance
+    Z_water = c * water_density
+
+    p_ref = 1e-6  # reference pressure in water (1 uPa)
+
+    def __init__(
+            self,
+            transducer: Transducer,
+            reflectors: list[Reflector]):
+        self.transducer = transducer
+        self.reflectors = reflectors
+
+    def run_simulation(self, ping: Ping):
+        """
+        Runs the simulation of the ping in the world with the transducer and reflectors.
+        """
+        # Transmit the ping
+        self.transducer.transmit_signal(ping)
+
+        ping_len = len(ping.signal)
+
+        # For each reflector, calculate the echo received at the transducer
+        for reflector in self.reflectors:
+            centre_dist = np.linalg.norm(
+                reflector.position - self.transducer.position
+                )
+            path_length = centre_dist - reflector.radius
+
+            # Apply outgoing spreading loss
+            outgoing_signal = ping.signal / path_length
+
+            # Apply reflection
+            reflected_signal = reflector.reflect(outgoing_signal)
+
+            # Apply incoming spreading loss
+            received_signal = reflected_signal / path_length
+
+            # Create pause for time delay between transmit and receive
+            time_of_flight = 2 * path_length / World.c
+            travel_samples = int(time_of_flight * ping.fs)
+            delay_samples = travel_samples - ping_len
+            signal_delay = np.zeros(delay_samples)
+
+            echo_signal = np.concatenate((signal_delay, received_signal))
+
+            self.transducer.receive_signal(echo_signal)
 
 
     
