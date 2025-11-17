@@ -15,16 +15,19 @@ class Transducer:
         self.angle_deg = angle_deg
         self.beam_width_deg = beam_width_deg
 
-    def transmit_signal(self, ping: 'Ping'):
+    def update_transmit_signal(self, ping: 'Ping'):
         """
         Resets the transducer history and appends the ping to be sent out.
         """
         self.transducer_history = ping.signal.copy()
 
-    def receive_signal(self, return_signal: np.ndarray):
+    def update_history_echo(self, return_signal: np.ndarray):
         self.transducer_history = np.concatenate(
             (self.transducer_history, return_signal)
             )
+    
+    def update_receive_signal(self, return_signal: np.ndarray):
+        self.receive_signal = return_signal.copy()
     
 
 
@@ -114,10 +117,11 @@ class World:
         Runs the simulation of the ping in the world with the transducer and reflectors.
         """
         # Transmit the ping
-        self.transducer.transmit_signal(ping)
+        self.transducer.update_transmit_signal(ping)
 
         ping_len = len(ping.signal)
 
+        superposed_echo = np.zeros(0)
         # For each reflector, calculate the echo received at the transducer
         for reflector in self.reflectors:
             centre_dist = np.linalg.norm(
@@ -140,9 +144,16 @@ class World:
             delay_samples = travel_samples - ping_len
             signal_delay = np.zeros(delay_samples)
 
-            echo_signal = np.concatenate((signal_delay, received_signal))
+            superposed_echo = left_add_arrays(
+                superposed_echo, np.concatenate((signal_delay, received_signal))
+                )
 
-            self.transducer.receive_signal(echo_signal)
+        self.transducer.update_history_echo(superposed_echo)
+        self.transducer.update_receive_signal(superposed_echo)
 
 
-    
+def left_add_arrays(a:np.ndarray, b:np.ndarray) -> np.ndarray:
+    out = np.zeros(max(len(a), len(b)))
+    out[:len(a)] += a
+    out[:len(b)] += b
+    return out
