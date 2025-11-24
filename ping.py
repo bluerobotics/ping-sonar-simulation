@@ -8,25 +8,51 @@ import copy
 class Transducer:
     def __init__(
             self, 
-            position: np.ndarray, 
+            position: np.ndarray,
+            velocity: np.ndarray = np.zeros(3), 
             angle_deg: float = 0.0,
             beam_width_deg: float = 25.0):
-        self.position = position
+        self.initial_position = position
+        self.velocity = velocity
         self.angle_deg = angle_deg
         self.beam_width_deg = beam_width_deg
 
-    def update_transmit_signal(self, ping: 'Ping'):
+    def update_transmit_signal(self, ping:'Ping'):
         """
         Resets the transducer history and appends the ping to be sent out.
+        
+        Parameters:
+        - world: World object containing simulation parameters.
+        - ping: Ping object containing the signal to be transmitted.
+        - d_max: Maximum reflector distance to consider for timing.
+
+        Returns the trajectory of the transducer up until the expected round
+        trip time for a target at d_max.
         """
         self.transducer_history = ping.signal.copy()
+        
+        displacement = np.outer(ping.ping_time, self.velocity) 
+        self.ping_positions = self.initial_position + displacement
+
 
     def update_history_echo(self, return_signal: np.ndarray):
-        self.transducer_history = np.concatenate(
-            (self.transducer_history, return_signal)
+        """
+        Adds the returned signal to the transducer history.
+
+        Parameters:
+        - return_signal: The signal received at the transducer.
+        """
+        self.transducer_history = left_add_arrays(
+            self.transducer_history, return_signal
             )
     
     def update_receive_signal(self, return_signal: np.ndarray):
+        """
+        Stores the received signal separately from the transducer history.
+
+        Parameters:
+        - return_signal: The signal received at the transducer.
+        """
         self.receive_signal = return_signal.copy()
     
 
@@ -35,26 +61,39 @@ class Ping:
     def __init__(
             self, 
             frequency: float | list, 
-            duration: float, 
+            n_cycles: int | None, 
             amplitude: float,
             phase: float = 0,
+            duration: float | None = None,
             sample_rate: int = 4e6,
             window_mode: str = 'gaussian'):
         self.frequency = np.atleast_1d(frequency)
-        self.duration = duration
+
+        # Determine duration of the signal, n_cycles takes priority
+        if n_cycles is not None:
+            if not self.frequency.any():
+                raise ValueError("Cannot calculate duration from n_cycles: frequency is not set.")
+            f_max = np.max(self.frequency)
+            period = 1 / f_max
+            self.duration = n_cycles * period
+        elif duration is not None:
+            self.duration = duration
+        else:
+            raise ValueError("Must provide either 'duration' or 'n_cycles'.")
+
         self.fs = sample_rate
         self.window_mode = window_mode
 
         self.amplitude = amplitude
         self.phase = phase
 
-        self.t = np.arange(0, self.duration, 1/self.fs)
+        self.ping_time = np.arange(0, self.duration, 1/self.fs)
         self.signal = self._generate_signal()
 
 
     def _generate_window(self, N):
         """
-        Generate a window function.
+        Generate a window function. Availble modes: 'gaussian'
         """
         if self.window_mode == 'gaussian':
             std = (0.2 * N)
@@ -62,13 +101,20 @@ class Ping:
         
 
     def _generate_signal(self):
-        signal = np.zeros_like(self.t)
+        """
+        Generate the ping signal from attributes.
+
+        Returns:
+        - signal: The generated ping signal as a numpy array, windowed as 
+        pecified.
+        """
+        signal = np.zeros_like(self.ping_time)
         for f in self.frequency:
-            signal += np.sin(2 * np.pi * f * self.t + self.phase)
+            signal += np.sin(2 * np.pi * f * self.ping_time + self.phase)
         if len(self.frequency) > 0:
             signal /= len(self.frequency)
             
-        window = self._generate_window(len(self.t))
+        window = self._generate_window(len(self.ping_time))
         
         return self.amplitude * signal * window
     
@@ -89,6 +135,12 @@ class Reflector:
     def reflect(self, incident_signal):
         """
         Applies 180 deg phase shift and reflectance loss.
+
+        Parameters:
+        - incident_signal: The signal incident on the reflector.
+
+        Returns:
+        - reflected_signal: The signal after reflection.
         """
         phase_shifted_signal = incident_signal * -1
         return phase_shifted_signal * self.reflectivity
@@ -98,12 +150,14 @@ class Reflector:
 class World:
     # speed of sound in water
     c = 1500 # m/s
+
     water_density = 997 # kg/m^3
     
     # acoustic impedance
     Z_water = c * water_density
 
-    p_ref = 1e-6  # reference pressure in water (1 uPa)
+    # reference pressure in water (1 uPa)
+    p_ref = 1e-6 # Pa
 
     def __init__(
             self,
@@ -112,47 +166,97 @@ class World:
         self.transducer = transducer
         self.reflectors = reflectors
 
+    def compute_receive_positions(self, points_A:list, point_P:np.ndarray) -> np.ndarray:
+        """
+        Computes the transducer positions during the receive phase.
+        """
+        v = np.linalg.norm(self.transducer.velocity)
+        v_hat = self.transducer.velocity/v if v != 0 else np.zeros(3) 
+        k = v / World.c
+        if k >= 1:
+            raise ValueError("Transducer velocity must be less than the " \
+            "speed of sound.")
+        
+        AP_vec = point_P - points_A
+        p = np.linalg.norm(AP_vec, axis=1) # shape (N,)
+        AP_hat = AP_vec / p[:, np.newaxis] # shape (N,3)
+    
+        cos_theta = np.dot(AP_hat, v_hat) # shape (N,)
+        
+        travel_distances = (2 * p * k * (1 - k * cos_theta)) / (1 - k**2)
+        travel_times = travel_distances/v if v != 0 else np.zeros(len(points_A)) 
+
+        return points_A + (travel_distances[:, np.newaxis] * v_hat), travel_times
+
+
     def run_simulation(self, ping: Ping):
         """
-        Runs the simulation of the ping in the world with the transducer and reflectors.
+        Runs the simulation world with the transducer and reflectors.
+
+        Parameters:
+        - ping: Ping object containing the signal to be transmitted.
         """
+        
         # Transmit the ping
         self.transducer.update_transmit_signal(ping)
-
-        ping_len = len(ping.signal)
 
         superposed_echo = np.zeros(0)
         # For each reflector, calculate the echo received at the transducer
         for reflector in self.reflectors:
-            centre_dist = np.linalg.norm(
-                reflector.position - self.transducer.position
+            # Compute transducer position at receive, and corresponding delay
+            receive_positions, receive_delays = self.compute_receive_positions(
+                self.transducer.ping_positions, reflector.position
                 )
-            path_length = centre_dist - reflector.radius
+
+            # Compute path lengths (two arms)
+            out_distances = np.linalg.norm(
+                reflector.position - self.transducer.ping_positions,axis=1
+                )
+            return_distances = np.linalg.norm(
+                reflector.position - receive_positions, axis=1
+                )
+            
+            # print(f"Time: {ping.ping_time}")
+            # print(f"Receive positions: {receive_positions}")
+            # print(f"Out distances: {out_distances}")
+            # print(f"Return distances: {return_distances}")
+            # print(f"Receive delays (s): {receive_delays}")
 
             # Apply outgoing spreading loss
-            outgoing_signal = ping.signal / path_length
+            outgoing_signal_values = ping.signal \
+                / (out_distances-reflector.radius)
 
             # Apply reflection
-            reflected_signal = reflector.reflect(outgoing_signal)
+            reflected_signal_values = reflector.reflect(outgoing_signal_values)
 
-            # Apply incoming spreading loss
-            received_signal = reflected_signal / path_length
+            # Apply returning spreading loss
+            received_signal_values = reflected_signal_values \
+                / (return_distances - reflector.radius)
 
-            # Create pause for time delay between transmit and receive
-            time_of_flight = 2 * path_length / World.c
-            travel_samples = int(time_of_flight * ping.fs)
-            delay_samples = travel_samples - ping_len
-            signal_delay = np.zeros(delay_samples)
+            # Map received signal to time axis with delays
+            idx = np.rint((ping.ping_time+receive_delays) * ping.fs).astype(int)
+            sums = np.bincount(idx, weights=received_signal_values)
+            counts = np.bincount(idx)
 
-            superposed_echo = left_add_arrays(
-                superposed_echo, np.concatenate((signal_delay, received_signal))
-                )
+            received_signal = sums / np.maximum(counts, 1)
+
+            superposed_echo = left_add_arrays(superposed_echo, received_signal)
 
         self.transducer.update_history_echo(superposed_echo)
         self.transducer.update_receive_signal(superposed_echo)
 
 
 def left_add_arrays(a:np.ndarray, b:np.ndarray) -> np.ndarray:
+    """
+    Adds two arrays of possibly different lengths by aligning them to the left.
+    
+    Parameters:
+    - a: First input array.
+    - b: Second input array.
+
+    Returns:
+    - out: The element-wise sum of the two arrays, aligned to the left.
+    """
     out = np.zeros(max(len(a), len(b)))
     out[:len(a)] += a
     out[:len(b)] += b
