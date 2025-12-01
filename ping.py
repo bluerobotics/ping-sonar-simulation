@@ -224,21 +224,27 @@ class World:
 
             # Apply outgoing spreading loss
             outgoing_signal_values = ping.signal \
-                / (out_distances-reflector.radius)
+                # / (out_distances-reflector.radius)
 
             # Apply reflection
             reflected_signal_values = reflector.reflect(outgoing_signal_values)
 
             # Apply returning spreading loss
             received_signal_values = reflected_signal_values \
-                / (return_distances - reflector.radius)
+                # / (return_distances - reflector.radius)
 
             # Map received signal to time axis with delays
             idx = np.rint((ping.ping_time+receive_delays) * ping.fs).astype(int)
+            binning_signal = np.full(idx.max()+1, np.nan)
             sums = np.bincount(idx, weights=received_signal_values)
             counts = np.bincount(idx)
 
-            received_signal = sums / np.maximum(counts, 1)
+            binning_signal[counts>0] = sums[counts>0] / np.maximum(counts[counts>0], 1)
+            coords = np.arange(len(binning_signal))
+            non_empty_mask = ~np.isnan(binning_signal)
+            x_valid = coords[non_empty_mask]
+            y_valid = binning_signal[non_empty_mask]
+            received_signal = np.interp(coords, x_valid, y_valid)
 
             superposed_echo = left_add_arrays(superposed_echo, received_signal)
 
