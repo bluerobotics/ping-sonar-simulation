@@ -52,7 +52,7 @@ class SeaFloor:
         self.topography = topography
         self.reflectance = reflectance
 
-        self.seafloor = self.create_seafloor(depth=depth, topography=topography, min_size=min_size, max_size=max_size)
+        self.seafloor = self.create_seafloor(depth=depth, topography=topography, min_size=min_size, max_size=max_size, num_spheres=num_spheres)
 
     
     def create_seafloor(self, depth, topography: str = 'flat', min_size: float = 1, max_size: float = 5, num_spheres: int = 10000) -> NDArray:
@@ -86,7 +86,7 @@ class SeaFloor:
         if (topography == 'flat'):
             x = np.random.uniform(-side_length / 2, side_length / 2, num_spheres)
             y = np.random.uniform(-side_length / 2, side_length / 2, num_spheres)
-            z = np.full(num_spheres, depth)
+            z = np.full(num_spheres, -depth)
             
             # Random radii
             radii = np.random.uniform(min_size, max_size, num_spheres)
