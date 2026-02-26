@@ -5,8 +5,9 @@ import matplotlib.pyplot as plt
 
 def get_peak_frequency(signal, fs):
     N = len(signal)
-    fft_spectrum = np.fft.rfft(signal)
-    freqs = np.fft.rfftfreq(N, d=1/fs)
+    N_pad = 5 * N
+    fft_spectrum = np.fft.rfft(signal, n=N_pad)
+    freqs = np.fft.rfftfreq(N_pad, d=1/fs)
     
     magnitude = np.abs(fft_spectrum)
     magnitude[0] = 0 
@@ -20,7 +21,7 @@ def get_peak_frequency(signal, fs):
     gamma = magnitude[k+1]
 
     p = k + 0.5 * (gamma - alpha) / (2 * beta - gamma - alpha)
-    peak_freq = p * fs / N
+    peak_freq = p * fs / N_pad
 
     return peak_freq, freqs, magnitude
 
