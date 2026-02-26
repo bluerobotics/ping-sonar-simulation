@@ -74,8 +74,7 @@ class Ping:
             if not self.frequency.any():
                 raise ValueError("Cannot calculate duration from n_cycles: frequency is not set.")
             f_max = np.max(self.frequency)
-            period = 1 / f_max
-            self.duration = n_cycles * period
+            self.duration = n_cycles / f_max
         elif duration is not None:
             self.duration = duration
         else:
@@ -87,7 +86,7 @@ class Ping:
         self.amplitude = amplitude
         self.phase = phase
 
-        self.ping_time = np.arange(0, self.duration, 1/self.fs)
+        self.ping_time = np.arange(int(self.duration * self.fs)) / self.fs
         self.signal = self._generate_signal()
 
 
@@ -98,6 +97,8 @@ class Ping:
         if self.window_mode == 'gaussian':
             std = (0.2 * N)
             return get_window(('gaussian', std), N)
+        else:
+            return np.ones(N)
         
 
     def _generate_signal(self):
@@ -166,10 +167,11 @@ class World:
         self.transducer = transducer
         self.reflectors = reflectors
 
-    def compute_receive_positions(self, points_A:list, point_P:np.ndarray) -> np.ndarray:
+    def compute_receive_positions(self, points_A:list, reflector:Reflector) -> np.ndarray:
         """
         Computes the transducer positions during the receive phase.
         """
+        point_P = reflector.position
         v = np.linalg.norm(self.transducer.velocity)
         v_hat = self.transducer.velocity/v if v != 0 else np.zeros(3) 
         k = v / World.c
@@ -183,7 +185,13 @@ class World:
     
         cos_theta = np.dot(AP_hat, v_hat) # shape (N,)
         
-        travel_distances = (2 * p * k * (1 - k * cos_theta)) / (1 - k**2)
+        a = 1 - k**-2
+        b = (2*p/k) - (2*p*cos_theta) - (4*reflector.radius/k)
+        c = (4*p*reflector.radius) - (4*reflector.radius**2)
+
+        discriminant = b**2 - 4*a*c
+
+        travel_distances = (-b - np.sqrt(discriminant)) / (2*a) # NEW
         travel_times = travel_distances/v if v != 0 else np.zeros(len(points_A)) 
 
         return points_A + (travel_distances[:, np.newaxis] * v_hat), travel_times
@@ -205,7 +213,7 @@ class World:
         for reflector in self.reflectors:
             # Compute transducer position at receive, and corresponding delay
             receive_positions, receive_delays = self.compute_receive_positions(
-                self.transducer.ping_positions, reflector.position
+                self.transducer.ping_positions, reflector
                 )
 
             # Compute path lengths (two arms)
