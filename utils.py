@@ -25,64 +25,92 @@ def get_peak_frequency(signal, fs):
 
     return peak_freq, freqs, magnitude
 
-def draw_sphere(ax, center, radius, color='r'):
-    """Helper to draw a sphere on a 3D axis."""
-    u = np.linspace(0, 2 * np.pi, 30)
-    v = np.linspace(0, np.pi, 30)
-    
-    x = center[0] + radius * np.outer(np.cos(u), np.sin(v))
-    y = center[1] + radius * np.outer(np.sin(u), np.sin(v))
-    z = center[2] + radius * np.outer(np.ones(np.size(u)), np.cos(v))
-    
-    ax.plot_surface(x, y, z, color=color, alpha=0.6)
 
-def plot_world_3d(transducer, reflector_list):
-    fig = plt.figure(figsize=(10, 8))
-    ax = fig.add_subplot(111, projection='3d')
+def plot_transmitted_signal(ping_object):
+    signal = ping_object.signal
+    time_axis = np.arange(len(signal)) / ping_object.fs
 
-    # A. Draw Reflectors
-    for i, ref in enumerate(reflector_list):
-        draw_sphere(ax, ref.position, ref.radius, color='grey')
-        # Add label near the sphere
-        ax.text(ref.position[0], ref.position[1], ref.position[2]+ref.radius*2, 
-                f'Reflector {i+1}', color='black')
-
-    # B. Draw Transducer Path
-    # We assume ping_positions is (N, 3)
-    path = transducer.ping_positions
-    
-    # We slice [::10] to avoid plotting too many points if sample rate is high
-    ax.scatter(path[::5, 0], path[::5, 1], path[::5, 2], 
-               c='blue', s=5, label='Transducer Path')
-    
-    # Mark start and end
-    ax.scatter(path[0,0], path[0,1], path[0,2], c='green', s=50, marker='x', label='Start')
-    ax.scatter(path[-1,0], path[-1,1], path[-1,2], c='black', s=50, marker='^', label='End')
-
-    # C. Formatting
-    ax.set_xlabel('X Position (m)')
-    ax.set_ylabel('Y Position (m)')
-    ax.set_zlabel('Z Position (m)')
-    ax.set_title('3D World Simulation')
-    ax.legend()
-
-    # D. Force Equal Aspect Ratio (Crucial for 3D spheres to look spherical)
-    # Calculate the limits of all data
-    all_x = np.concatenate([path[:,0], [r.position[0] for r in reflector_list]])
-    all_y = np.concatenate([path[:,1], [r.position[1] for r in reflector_list]])
-    all_z = np.concatenate([path[:,2], [r.position[2] for r in reflector_list]])
-
-    max_range = np.array([all_x.max()-all_x.min(), 
-                          all_y.max()-all_y.min(), 
-                          all_z.max()-all_z.min()]).max() / 2.0
-
-    mid_x = (all_x.max()+all_x.min()) * 0.5
-    mid_y = (all_y.max()+all_y.min()) * 0.5
-    mid_z = (all_z.max()+all_z.min()) * 0.5
-
-    ax.set_xlim(mid_x - max_range, mid_x + max_range)
-    ax.set_ylim(mid_y - max_range, mid_y + max_range)
-    ax.set_zlim(mid_z - max_range, mid_z + max_range)
-
-    plt.axis('equal')
+    plt.figure(figsize=(12, 5))
+    plt.plot(time_axis, signal)
+    plt.title("Transmitted Ping Signal")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Amplitude (arb. units)")
+    plt.grid()
     plt.show()
+
+def plot_received_signal(transducer_object, ping_object):
+    signal = transducer_object.receive_signal
+    time_axis = np.arange(len(signal)) / ping_object.fs
+
+    plt.figure(figsize=(12, 5))
+    plt.plot(time_axis, signal)
+    plt.title("Received Signal with Single Reflector")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Amplitude (arb. units)")
+    plt.grid()
+    plt.show()
+
+def plot_transducer_history(transducer_object, ping_object):
+    signal = transducer_object.transducer_history
+    time_axis = np.arange(len(signal)) / ping_object.fs
+
+    plt.figure(figsize=(12, 5))
+    plt.plot(time_axis, signal)
+    plt.title("Transducer Signal History")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Amplitude (arb. units)")
+    plt.grid()
+    plt.show()
+
+def plot_transducer_position(transducer_object, ping_object):
+    signal = transducer_object.ping_positions
+    time_axis = np.arange(len(signal)) / ping_object.fs
+
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
+
+    # --- Plot X ---
+    ax1.plot(time_axis, signal[:, 0], color='tab:blue')
+    ax1.set_ylabel('X Position (m)')
+    ax1.set_title("Transducer Position History")
+    ax1.grid(True)
+
+    # --- Plot Y ---
+    ax2.plot(time_axis, signal[:, 1], color='tab:orange')
+    ax2.set_ylabel('Y Position (m)')
+    ax2.grid(True)
+
+    # --- Plot Z ---
+    ax3.plot(time_axis, signal[:, 2], color='tab:green')
+    ax3.set_ylabel('Z Position (m)')
+    ax3.set_xlabel("Time (s)")
+    ax3.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+
+
+def compute_velocity(f_r, f_t, c, sigma_f_t=0):
+    """
+    Compute the velocity of the transducer in the direction of the reflector
+    based on the observed Doppler shift.
+
+    Parameters:
+    - f_r: Received frequency (Hz)
+    - f_t: Original transmitted frequency (Hz)
+    - c: Speed of sound in the medium (m/s)
+
+    Returns:
+    - velocity: Estimated
+    """
+    # dopppler shift amount
+    f_d = f_r - f_t
+    sigma_f_d = sigma_f_t
+    
+    # v = (f_d * c) / (2 * f_t + f_d)
+    v = (f_d * c) / (2 * f_t)
+
+    # error propagation for velocity estimate
+    sigma_v = sigma_f_d * (2 * f_t * c) / (2 * f_t + f_d)**2
+
+    return v, sigma_v

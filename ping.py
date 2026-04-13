@@ -35,7 +35,7 @@ class Transducer:
         self.ping_positions = self.initial_position + displacement
 
 
-    def update_history_echo(self, return_signal: np.ndarray):
+    def update_history_echo(self, return_signal: np.ndarray, ping: 'Ping'):
         """
         Adds the returned signal to the transducer history.
 
@@ -45,6 +45,10 @@ class Transducer:
         self.transducer_history = left_add_arrays(
             self.transducer_history, return_signal
             )
+        
+        time_arr = np.arange(len(self.transducer_history)) / ping.fs
+        displacement = np.outer(time_arr, self.velocity)
+        self.ping_positions = self.initial_position + displacement
     
     def update_receive_signal(self, return_signal: np.ndarray):
         """
@@ -54,6 +58,7 @@ class Transducer:
         - return_signal: The signal received at the transducer.
         """
         self.receive_signal = return_signal.copy()
+        
     
 
 
@@ -232,14 +237,14 @@ class World:
 
             # Apply outgoing spreading loss
             outgoing_signal_values = ping.signal \
-                # / (out_distances-reflector.radius)
+                / (out_distances-reflector.radius)
 
             # Apply reflection
             reflected_signal_values = reflector.reflect(outgoing_signal_values)
 
             # Apply returning spreading loss
             received_signal_values = reflected_signal_values \
-                # / (return_distances - reflector.radius)
+                / (return_distances - reflector.radius)
 
             # Map received signal to time axis with delays
             idx = np.rint((ping.ping_time+receive_delays) * ping.fs).astype(int)
@@ -256,7 +261,7 @@ class World:
 
             superposed_echo = left_add_arrays(superposed_echo, received_signal)
 
-        self.transducer.update_history_echo(superposed_echo)
+        self.transducer.update_history_echo(superposed_echo, ping)
         self.transducer.update_receive_signal(superposed_echo)
 
 
