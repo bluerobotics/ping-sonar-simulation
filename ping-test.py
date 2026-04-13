@@ -36,8 +36,8 @@ time_axis = np.arange(len(history)) / ping_object.fs
 
 plt.figure(figsize=(12, 5))
 plt.plot(time_axis, history)
-plt.title("Transducer Signal History (Transmit -> Pause -> Echo)")
+plt.title("Transducer Signal History")
 plt.xlabel("Time (s)")
-plt.ylabel("Amplitude (Pa)")
+plt.ylabel("Amplitude (arb. units)")
 plt.grid()
 plt.show()
